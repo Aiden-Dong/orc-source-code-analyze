@@ -1,0 +1,16 @@
+build
+target
+.classpath*
+.project
+.settings
+*.orc
+*.crc
+*~
+*.iml
+dependency-reduced-pom.xml
+*.ipr
+*.iws
+.idea
+.DS_Store
+.java-version
+java/bench/data

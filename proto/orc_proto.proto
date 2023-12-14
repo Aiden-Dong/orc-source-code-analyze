@@ -1,0 +1,465 @@
+/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+syntax = "proto2";
+
+package orc.proto;
+
+option java_package = "org.apache.orc";
+
+/***
+ * Statistics 统计指标类型
+ * 主要用来统计每个列的汇总信息，例如最大最小值等
+ */
+message IntegerStatistics  {
+  optional sint64 minimum = 1;
+  optional sint64 maximum = 2;
+  optional sint64 sum = 3;
+}
+
+message DoubleStatistics {
+  optional double minimum = 1;
+  optional double maximum = 2;
+  optional double sum = 3;
+}
+
+message StringStatistics {
+  optional string minimum = 1;
+  optional string maximum = 2;
+  // sum将存储stripe中所有字符串的总长度
+  optional sint64 sum = 3;
+
+  // 如果最小值或最大值超过1024字节，请存储下限或上限，而不是上述最小值或上限。
+  // 用于缩短存储空间
+  optional string lowerBound = 4;
+  optional string upperBound = 5;
+}
+
+// ???? bucket ? 
+message BucketStatistics {
+  repeated uint64 count = 1 [packed=true];
+}
+
+message DecimalStatistics {
+  optional string minimum = 1;
+  optional string maximum = 2;
+  optional string sum = 3;
+}
+
+message DateStatistics {
+  // min,max values saved as days since epoch
+  optional sint32 minimum = 1;
+  optional sint32 maximum = 2;
+}
+
+message TimestampStatistics {
+  // min,max values saved as milliseconds since epoch
+  optional sint64 minimum = 1;
+  optional sint64 maximum = 2;
+  optional sint64 minimumUtc = 3;
+  optional sint64 maximumUtc = 4;
+  // store the lower 6 TS digits for min/max to achieve nanosecond precision
+  optional int32 minimumNanos = 5;
+  optional int32 maximumNanos = 6;
+}
+
+message BinaryStatistics {
+  // sum will store the total binary blob length in a stripe
+  optional sint64 sum = 1;
+}
+
+// Statistics for list and map
+message CollectionStatistics {
+  optional uint64 minChildren = 1;
+  optional uint64 maxChildren = 2;
+  optional uint64 totalChildren = 3;
+}
+
+/***
+ * 列的汇总统计信息，封装了这个列的相关统计内容
+ */
+message ColumnStatistics {
+  optional uint64 numberOfValues = 1;                         // 这个列下面有多少个值
+  optional IntegerStatistics intStatistics = 2;               //===================//
+  optional DoubleStatistics doubleStatistics = 3;             //                   //
+  optional StringStatistics stringStatistics = 4;             //                   //
+  optional BucketStatistics bucketStatistics = 5;             //                   //
+  optional DecimalStatistics decimalStatistics = 6;           //  列内容指标统计    //
+  optional DateStatistics dateStatistics = 7;                 //                   //
+  optional BinaryStatistics binaryStatistics = 8;             //                   //
+  optional TimestampStatistics timestampStatistics = 9;       //===================//
+  optional bool hasNull = 10;                                 // 是否有空值         
+  optional uint64 bytesOnDisk = 11;                           // 此列数据长度
+  optional CollectionStatistics collectionStatistics = 12;    // 复杂类型的统计指标 (map, list)
+}
+
+/****
+ * 每个RowGroup的每个列的统计信息
+ */
+message RowIndexEntry {
+  repeated uint64 positions = 1 [packed=true];      // 列位置 ???? 为啥多个， 是说可能太大了？ 
+  optional ColumnStatistics statistics = 2;         // 包含行组内的列的相关统计信息，最大值，最小值，求和，
+}
+
+/****
+ * RowGroup 中的每个列的索引信息
+ */
+message RowIndex {
+  repeated RowIndexEntry entry = 1;           
+}
+
+/***
+ * Bloom 过滤器定义
+ */
+message BloomFilter {
+  optional uint32 numHashFunctions = 1;   // hash 函数的个数
+  repeated fixed64 bitset = 2;            // 内容体
+  optional bytes utf8bitset = 3;
+}
+
+message BloomFilterIndex {
+  repeated BloomFilter bloomFilter = 1;   
+}
+
+/****
+ * 数据流信息，主要记录列相关信息:
+ * 1. 列名
+ * 2. 列的数据流类型
+ * 3. 列的此数据流大小
+ */
+message Stream {
+  
+  // 数据流的类型
+  enum Kind {
+    PRESENT = 0;                  // 位图流，其中每个位对应于行组中的一个元素，指示该元素是否存在。
+    DATA = 1;                     // 数据实体
+    LENGTH = 2;                   // 存在于字符型列数据流中，记录每个字符串长度
+    DICTIONARY_DATA = 3;          // 字符型数据流采用字典编码时，存储去重排序后的字典值
+    DICTIONARY_COUNT = 4;         // Hive 0.11 之前被弃用，用于存储字典中每个值的实例数
+    SECONDARY = 5;                // 用于decimal或者timestamp,用于辅助存储一些数据
+    ROW_INDEX = 6;                // 原始索引类型
+    BLOOM_FILTER = 7;             // 列的BloomFilter数据体
+    BLOOM_FILTER_UTF8 = 8;        // 列的BloomFilter数据体
+    ENCRYPTED_INDEX = 9;          // 加密索引类型
+    ENCRYPTED_DATA = 10;          // 加密列数据类型
+    STRIPE_STATISTICS = 100;      // Stripe 统计信息数据体
+    FILE_STATISTICS = 101;        // 文件统计信息数据体
+  }
+  optional Kind kind = 1;          // 表示此数据流的类型
+  optional uint32 column = 2;      // 列的标识ID
+  optional uint64 length = 3;      // 流长度
+}
+
+// 列编码类型
+message ColumnEncoding {
+  enum Kind {
+    DIRECT = 0;
+    DICTIONARY = 1;    // 字典编码
+    DIRECT_V2 = 2;
+    DICTIONARY_V2 = 3;
+  }
+  optional Kind kind = 1;
+  optional uint32 dictionarySize = 2;
+
+  // 此列的BloomFile 编码:
+  //   0 or missing = 没有编码
+  //   1            = ORC-135 (utc for timestamps)
+  optional uint32 bloomEncoding = 3;
+}
+
+message StripeEncryptionVariant {
+  repeated Stream streams = 1;
+  repeated ColumnEncoding encoding = 2;
+}
+
+// each stripe looks like:
+//   index streams
+//     unencrypted
+//     variant 1..N
+//   data streams
+//     unencrypted
+//     variant 1..N
+//   footer
+
+message StripeFooter {
+  repeated Stream streams = 1;                       // 普通列流类型统计 -- 包含索引类型跟数据类型的流类型统计
+  repeated ColumnEncoding columns = 2;               // 列编码
+  optional string writerTimezone = 3;                // 写时区
+  // one for each column encryption variant
+  repeated StripeEncryptionVariant encryption = 4;   //加密列流类型统计
+}
+
+// the file tail looks like:
+//   encrypted stripe statistics: ColumnarStripeStatistics (order by variant)
+//   stripe statistics: Metadata
+//   footer: Footer
+//   postscript: PostScript
+//   psLen: byte
+
+message StringPair {
+  optional string key = 1;
+  optional string value = 2;
+}
+
+// Schema 信息
+message Type {
+  enum Kind {
+    BOOLEAN = 0;
+    BYTE = 1;
+    SHORT = 2;
+    INT = 3;
+    LONG = 4;
+    FLOAT = 5;
+    DOUBLE = 6;
+    STRING = 7;
+    BINARY = 8;
+    TIMESTAMP = 9;
+    LIST = 10;
+    MAP = 11;
+    STRUCT = 12;
+    UNION = 13;
+    DECIMAL = 14;
+    DATE = 15;
+    VARCHAR = 16;
+    CHAR = 17;
+    TIMESTAMP_INSTANT = 18;
+  }
+  optional Kind kind = 1;  // Schema 类型
+  repeated uint32 subtypes = 2 [packed=true];    // 字段类型
+  repeated string fieldNames = 3;                // 字段名
+  optional uint32 maximumLength = 4;
+  optional uint32 precision = 5;
+  optional uint32 scale = 6;
+  repeated StringPair attributes = 7;
+}
+
+/****
+ *  Stripe 索引信息
+ */
+message StripeInformation {
+
+  optional uint64 offset = 1;             // Stripe 的起始位置
+  optional uint64 indexLength = 2;        // Stripe 索引长度
+  optional uint64 dataLength = 3;         // Stripe 数据长度
+  optional uint64 footerLength = 4;       // Stripe Footer 长度
+  optional uint64 numberOfRows = 5;       // Stripe 数据行数
+
+  // 如果存在，读取器应该使用此值设置加密IV的加密stripe标识。
+  // 否则，读取器应该使用比前一个stripe的 encryptStripeId 大一的值。
+  // 对于未合并的 ORC 文件，第一个stripe将使用 1，其余的条带不会设置它。
+  // 对于已合并的文件，stripe信息将从其原始文件复制，因此每个输入文件的第一个stripe将其重置为 1。
+  // 请注意选择了 1，因为 protobuf v3 不会序列化默认值为 0 的原始类型。
+  optional uint64 encryptStripeId = 6;
+  
+  // 对于每个加密变体，使用的新加密本地密钥，直到找到替代项。
+  repeated bytes encryptedLocalKeys = 7;
+}
+
+/**
+ * 用户自定义元信息
+ */
+message UserMetadataItem {
+  optional string name = 1;
+  optional bytes value = 2;
+}
+
+// StripeStatistics（每个stripe一个），其中每个包含每列的 ColumnStatistics.
+// 此类型仅在 ORC v0 和 v1 中使用。
+message StripeStatistics {
+  repeated ColumnStatistics colStats = 1;
+}
+
+// This message type is only used in ORC v0 and v1.
+message Metadata { 
+  repeated StripeStatistics stripeStats = 1;
+}
+
+// In ORC v2 (and for encrypted columns in v1), each column has
+// their column statistics written separately.
+message ColumnarStripeStatistics {
+  // one value for each stripe in the file
+  repeated ColumnStatistics colStats = 1;
+}
+
+enum EncryptionAlgorithm {
+  UNKNOWN_ENCRYPTION = 0;  // used for detecting future algorithms
+  AES_CTR_128 = 1;
+  AES_CTR_256 = 2;
+}
+
+message FileStatistics {
+  repeated ColumnStatistics column = 1;
+}
+
+// How was the data masked? This isn't necessary for reading the file, but
+// is documentation about how the file was written.
+message DataMask {
+  // the kind of masking, which may include third party masks
+  optional string name = 1;
+  // parameters for the mask
+  repeated string maskParameters = 2;
+  // the unencrypted column roots this mask was applied to
+  repeated uint32 columns = 3 [packed = true];
+}
+
+// Information about the encryption keys.
+message EncryptionKey {
+  optional string keyName = 1;
+  optional uint32 keyVersion = 2;
+  optional EncryptionAlgorithm algorithm = 3;
+}
+
+// The description of an encryption variant.
+// Each variant is a single subtype that is encrypted with a single key.
+message EncryptionVariant {
+  // the column id of the root
+  optional uint32 root = 1;
+  // The master key that was used to encrypt the local key, referenced as
+  // an index into the Encryption.key list.
+  optional uint32 key = 2;
+  // the encrypted key for the file footer
+  optional bytes encryptedKey = 3;
+  // the stripe statistics for this variant
+  repeated Stream stripeStatistics = 4;
+  // encrypted file statistics as a FileStatistics
+  optional bytes fileStatistics = 5;
+}
+
+// Which KeyProvider encrypted the local keys.
+enum KeyProviderKind {
+  UNKNOWN = 0;
+  HADOOP = 1;
+  AWS = 2;
+  GCP = 3;
+  AZURE = 4;
+}
+
+message Encryption {
+  // all of the masks used in this file
+  repeated DataMask mask = 1;
+  // all of the keys used in this file
+  repeated EncryptionKey key = 2;
+  // The encrypted variants.
+  // Readers should prefer the first variant that the user has access to
+  // the corresponding key. If they don't have access to any of the keys,
+  // they should get the unencrypted masked data.
+  repeated EncryptionVariant variants = 3;
+  // How are the local keys encrypted?
+  optional KeyProviderKind keyProvider = 4;
+}
+
+enum CalendarKind {
+  UNKNOWN_CALENDAR = 0;
+   // A hybrid Julian/Gregorian calendar with a cutover point in October 1582.
+  JULIAN_GREGORIAN = 1;
+  // A calendar that extends the Gregorian calendar back forever.
+  PROLEPTIC_GREGORIAN = 2;
+}
+
+message Footer {
+  optional uint64 headerLength = 1;           // orc 文件header长度 -- OrcFile.MAGIC 魔数
+  optional uint64 contentLength = 2;          // orc 文件body长度
+  repeated StripeInformation stripes = 3;     // stripe 索引信息
+  repeated Type types = 4;                    // schema 信息
+  repeated UserMetadataItem metadata = 5;     // 用户自定义元信息
+  optional uint64 numberOfRows = 6;           // 包含的行数据
+  repeated ColumnStatistics statistics = 7;   // 文件级别的每个列的统计信息statics
+  optional uint32 rowIndexStride = 8;         // ORC索引跨距 : orc.row.index.stride
+
+  // 每个编写 ORC 文件的实现都应该注册一个代码。
+  // 0 = ORC Java
+  // 1 = ORC C++
+  // 2 = Presto
+  // 3 = Scritchley Go from https://github.com/scritchley/orc
+  // 4 = Trino
+  optional uint32 writer = 9;
+
+  // information about the encryption in this file
+  optional Encryption encryption = 10;       // 对于加密列的处理
+  optional CalendarKind calendar = 11;
+
+  // 有关编写文件的软件版本的信息性描述。假定它在给定的写入器内，例如 ORC 1.7.2 = "1.7.2"。它可以包括后缀，如“-SNAPSHOT”。
+  optional string softwareVersion = 12;
+}
+
+enum CompressionKind {
+  NONE = 0;
+  ZLIB = 1;
+  SNAPPY = 2;
+  LZO = 3;
+  LZ4 = 4;
+  ZSTD = 5;
+}
+
+// Serialized length must be less that 255 bytes
+message PostScript {
+  optional uint64 footerLength = 1;                 // 记录当前的footer的长度
+  optional CompressionKind compression = 2;         // 记录当前压缩信息
+  optional uint64 compressionBlockSize = 3;
+
+  // postscript 中存储的版本是保证能够读取文件的最低版本的Hive，以主版本号和次版本号的序列存储。
+  //   [0, 11] = Hive 0.11
+  //   [0, 12] = Hive 0.12
+  repeated uint32 version = 4 [packed = true];
+
+
+  optional uint64 metadataLength = 5;              // 记录metadata的长度
+
+  // 写入文件的写入器版本。
+  // 当我们对写入器进行修复或进行较大更改时，此数字将更新，以便读取器可以检测数据中是否存在特定的错误。
+  //
+  // 只有Java ORC写入器可以使用6以下（或缺失的）值，以便在ORC-202之前的读取器正确处理新的写入器。
+  // 写入器应该从6开始分配自己的版本序列。
+  //
+  // ORC Java写入器的版本：
+  //   0 = original
+  //   1 = HIVE-8732 fixed (fixed stripe/file maximum statistics & string statistics use utf8 for min/max)
+  //   2 = HIVE-4243 fixed (use real column names from Hive tables)
+  //   3 = HIVE-12055 added (vectorized writer implementation)
+  //   4 = HIVE-13083 fixed (decimals write present stream correctly)
+  //   5 = ORC-101 fixed (bloom filters use utf8 consistently)
+  //   6 = ORC-135 fixed (timestamp statistics use utc)
+  //   7 = ORC-517 fixed (decimal64 min/max incorrect)
+  //   8 = ORC-203 added (trim very long string statistics)
+  //   9 = ORC-14 added (column encryption)
+  //
+  // ORC C++ 写入器的版本 :
+  //   6 = original
+  //
+  // ORC Presto 写入器的版本 :
+  //   6 = original
+  //
+  // ORC Go 写入器的版本 :
+  //   6 = original
+  //
+  // ORC Trino 写入器的版本 :
+  //   6 = original
+
+  optional uint32 writerVersion = 6;
+  optional uint64 stripeStatisticsLength = 7;    // 加密stripe统计信息的字节数
+  optional string magic = 8000;                  // 魔数
+}
+
+// 必须序列化的文件尾的内容.
+// 将作为 OrcSplit 的一部分进行序列化，同时也被页脚缓存所使用.
+message FileTail {
+  optional PostScript postscript = 1;
+  optional Footer footer = 2;
+  optional uint64 fileLength = 3;
+  optional uint64 postscriptLength = 4;
+}
